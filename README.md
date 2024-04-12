@@ -10,8 +10,22 @@ To self-host, clone the repository:
 git clone
 ```
 
+Create Turso database:
+[Turso](https://turso.tech/)
+
+Create a `.env` file in the root directory and add the following:
+```sh
+TURSO_URL={libsql://your-turso-url.turso.io}
+TURSO_AUTH_TOKEN={YOUR_AUTH_TOKEN}
+```
+
 Download Bun:
 [BunJS](https://bun.sh/)
+
+Push schema to Turso:
+```sh
+bunx drizzle-kit push:sqlite
+```
 
 Starting Flux:
 ```sh
