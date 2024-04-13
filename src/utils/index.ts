@@ -1,18 +1,18 @@
 import { db } from "../db";
-import { apiKeys, fluxes } from "../db/schema";
+import { apiKeys, fluxpoints } from "../db/schema";
 import { hashString } from "./hashing";
 
 
 export async function newFlux() {
     const apiKeyString = generateApiKey();
 
-    const [flux] = await db.insert(fluxes).values({
+    const [flux] = await db.insert(fluxpoints).values({
         data: null,
     }).onConflictDoUpdate({
         set: {
             data: null,
         },
-        target: [fluxes.id]
+        target: [fluxpoints.id]
     }).returning();
 
     const [apiKey] = await db.insert(apiKeys).values({

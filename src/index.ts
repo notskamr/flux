@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 import { EventEmitter } from 'events';
 import { newFlux } from './utils';
 import { db } from './db';
-import { fluxes } from './db/schema';
+import { fluxpoints } from './db/schema';
 import { count, eq, sql } from 'drizzle-orm';
 
 import { cors } from "hono/cors";
@@ -28,9 +28,9 @@ interface EmitMessage {
 }
 
 async function sendData(message: EmitMessage) {
-  await db.update(fluxes).set({
+  await db.update(fluxpoints).set({
     data: message.data
-  }).where(eq(fluxes.id, message.fluxId));
+  }).where(eq(fluxpoints.id, message.fluxId));
   eventEmitter.emit("message", message);
 }
 
@@ -73,7 +73,7 @@ app.post("/flux/:id", async (c) => {
     return c.json({ error: "Data too large" }, 400);
   }
 
-  const flux = await db.query.fluxes.findFirst({
+  const flux = await db.query.fluxpoints.findFirst({
     where: (f, { eq }) => eq(f.id, id),
     with: {
       apiKey: true
@@ -85,7 +85,7 @@ app.post("/flux/:id", async (c) => {
   }
 
   if (!flux.apiKey) {
-    await db.delete(fluxes).where(eq(fluxes.id, id));
+    await db.delete(fluxpoints).where(eq(fluxpoints.id, id));
     return c.json({ error: "Flux not found" }, 404);
   }
 
@@ -102,7 +102,7 @@ app.post("/flux/:id", async (c) => {
 app.get("/flux/:id", async (c) => {
   const id = c.req.param("id");
   const onFirst = c.req.query("onFirst") === "true";
-  const flux = await db.query.fluxes.findFirst({
+  const flux = await db.query.fluxpoints.findFirst({
     where: (f, { eq }) => eq(f.id, id),
   });
 
@@ -132,7 +132,7 @@ app.get("/flux/:id", async (c) => {
 });
 
 app.get("/fluxpoints", async (c) => {
-  const { 0: { value: count_ } } = await db.select({ value: count(fluxes.id) }).from(fluxes);
+  const { 0: { value: count_ } } = await db.select({ value: count(fluxpoints.id) }).from(fluxpoints);
   return c.json({ count: count_ });
 });
 
