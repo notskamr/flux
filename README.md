@@ -1,6 +1,8 @@
 # Flux
 A simple, data streaming service that takes advantage of <a href="https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events" target="_blank">Server-Sent Events (SSE)</a>.
 
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/_RXeq1?referralCode=OutMii)
+
 ## Docs
 [Website](https://flux.vsahni.me/)
 
