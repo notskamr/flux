@@ -19,6 +19,7 @@ Create a `.env` file in the root directory and add the following:
 ```sh
 TURSO_URL={libsql://your-turso-url.turso.io}
 TURSO_AUTH_TOKEN={YOUR_AUTH_TOKEN}
+API_KEY={OPTIONAL_API_KEY}
 ```
 
 Download Bun:
