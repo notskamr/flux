@@ -2,7 +2,6 @@ import { db } from "../db";
 import { apiKeys, fluxpoints } from "../db/schema";
 import { hashString } from "./hashing";
 
-
 export async function newFlux() {
     const apiKeyString = generateApiKey();
 

@@ -1,24 +1,17 @@
-/** @jsx jsx */
-/** @jsxImportSource hono/jsx */
-
 import { Hono } from 'hono';
+import { cors } from "hono/cors";
+import { serveStatic } from 'hono/bun';
+import { streamSSE } from 'hono/streaming';
 import { EventEmitter } from 'events';
-import { newFlux } from './utils';
 import { db } from './db';
 import { fluxpoints } from './db/schema';
-import { count, eq, sql } from 'drizzle-orm';
-
-import { cors } from "hono/cors";
-import { streamSSE } from 'hono/streaming';
+import { count, eq } from 'drizzle-orm';
+import { newFlux } from './utils';
 import { verifyString } from './utils/hashing';
-
-import { serveStatic } from 'hono/bun';
-
-
+import 'dotenv/config';
 
 
 const app = new Hono();
-
 app.use("*", cors());
 
 const eventEmitter = new EventEmitter();
@@ -46,6 +39,13 @@ app.get("/new", serveStatic({
 
 
 app.post("/new", async (c) => {
+  const authorization = c.req.header("Authorization");
+  const bearer = authorization?.split(" ")[1];
+
+  if (!!process.env.API_KEY && bearer !== process.env.API_KEY) {
+    return c.json({ error: "Invalid API key" }, 401);
+  }
+
   const fluxDetails = await newFlux();
   return c.json(fluxDetails);
 });
