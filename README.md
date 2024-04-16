@@ -7,35 +7,33 @@ A simple, data streaming service that takes advantage of <a href="https://develo
 [Website](https://flux.vsahni.me/)
 
 ## Self-Hosting
-To self-host, clone the repository:
+1. To self-host, clone the repository:
 ```sh
 git clone
 ```
 
-Create Turso database:
+2. Create a Turso database:
 [Turso](https://turso.tech/)
 
-Create a `.env` file in the root directory and add the following:
-```sh
-TURSO_URL={libsql://your-turso-url.turso.io}
-TURSO_AUTH_TOKEN={YOUR_AUTH_TOKEN}
-API_KEY={OPTIONAL_API_KEY}
-```
+3. Create a `.env` file in the root directory and add the following:
+    ```sh
+    TURSO_URL={libsql://your-turso-url.turso.io}
+    TURSO_AUTH_TOKEN={YOUR_AUTH_TOKEN}
+    API_KEY={OPTIONAL_API_KEY}
+    ```
 
-Download Bun:
+4. Download Bun:
 [BunJS](https://bun.sh/)
 
-Push schema to Turso:
-```sh
-bunx drizzle-kit push:sqlite
-```
-
-Starting Flux:
-```sh
-bun install && bun run start
-```
+5. Push schema to Turso
+   ```sh
+    bunx drizzle-kit push:sqlite
+    ```
 
 
+### Hosting
+Host on Vercel, Railway, a VPS with Docker, or any other hosting service that supports Bun.
+Make sure to add the environment variables to the hosting service.
 
 
 ## Development
