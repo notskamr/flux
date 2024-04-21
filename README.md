@@ -12,8 +12,8 @@ A simple, data streaming service that takes advantage of <a href="https://develo
 git clone
 ```
 
-2. Create a Turso database:
-[Turso](https://turso.tech/)
+2. Create a [Turso](https://turso.tech/) database
+
 
 3. Create a `.env` file in the root directory and add the following:
     ```sh
@@ -22,8 +22,7 @@ git clone
     API_KEY={OPTIONAL_API_KEY}
     ```
 
-4. Download Bun:
-[BunJS](https://bun.sh/)
+4. Download [Bun](https://bun.sh/)
 
 5. Push schema to Turso
    ```sh
