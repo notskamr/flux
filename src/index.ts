@@ -10,7 +10,6 @@ import { newFlux } from './utils';
 import { verifyString } from './utils/hashing';
 import 'dotenv/config';
 
-
 const app = new Hono();
 app.use("*", cors());
 
@@ -132,7 +131,7 @@ app.get("/flux/:id", async (c) => {
 });
 
 app.get("/fluxpoints", async (c) => {
-  const { 0: { value: count_ } } = await db.select({ value: count(fluxpoints.id) }).from(fluxpoints);
+  const [{ value: count_ }] = await db.select({ value: count(fluxpoints.id) }).from(fluxpoints);
   return c.json({ count: count_ });
 });
 
