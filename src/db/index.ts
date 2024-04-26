@@ -14,7 +14,6 @@ export const createDb = async (client: Client) => {
     const db = drizzle(client, {
         schema
     });
-    migrate(db, { migrationsFolder: "./migrations" });
     if (client.protocol === "file" && process.env.WAL_MODE === "true") {
         await client.execute("PRAGMA journal_mode = WAL;");
     }
