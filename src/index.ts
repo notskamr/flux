@@ -11,7 +11,12 @@ import { verifyString } from './utils/hashing';
 import 'dotenv/config';
 
 const app = new Hono();
-app.use("*", cors());
+app.use("*", cors({
+  origin: "*",
+  allowMethods: ["GET", "POST", "OPTIONS"],
+  allowHeaders: ["Authorization"],
+  credentials: true
+}));
 
 const eventEmitter = new EventEmitter();
 interface EmitMessage {
