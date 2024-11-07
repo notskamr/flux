@@ -9,8 +9,125 @@ import { count, eq } from 'drizzle-orm';
 import { newFlux } from './utils';
 import { verifyString } from './utils/hashing';
 import 'dotenv/config';
+import { StatusCode } from 'hono/utils/http-status';
+
+// Configuration constants
+const MAX_CONNECTIONS = 10000;
+const MAX_CONNECTIONS_PER_FLUX = 250;
+const HEARTBEAT_INTERVAL = 30000; // 30 seconds
+const CONNECTION_TIMEOUT = 300000; // 5 minutes
+const MAX_PAYLOAD_SIZE = 2000; // bytes
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const MAX_REQUESTS_PER_WINDOW = 100;
+
+// Custom error class
+class FluxError extends Error {
+  constructor(public status: StatusCode, message: string) {
+    super(message);
+  }
+}
+
+// Connection management
+class ConnectionManager {
+  private connections: Map<string, Set<EventEmitter>> = new Map();
+  private connectionCounts: Map<string, number> = new Map();
+  private rateLimits: Map<string, { count: number, timestamp: number; }> = new Map();
+
+  constructor() {
+    // Periodic cleanup of stale connections
+    setInterval(() => this.cleanup(), CONNECTION_TIMEOUT);
+  }
+
+  private cleanup() {
+    const now = Date.now();
+    this.connections.forEach((emitters, fluxId) => {
+      emitters.forEach(emitter => {
+        if ((emitter as any).lastActivity < now - CONNECTION_TIMEOUT) {
+          this.removeConnection(fluxId, emitter);
+        }
+      });
+    });
+  }
+
+  async addConnection(fluxId: string): Promise<EventEmitter> {
+    // Check global connection limit
+    const totalConnections = Array.from(this.connectionCounts.values())
+      .reduce((sum, count) => sum + count, 0);
+    if (totalConnections >= MAX_CONNECTIONS) {
+      throw new FluxError(503, "Server at capacity");
+    }
+
+    // Check per-flux connection limit
+    const currentCount = this.connectionCounts.get(fluxId) || 0;
+    if (currentCount >= MAX_CONNECTIONS_PER_FLUX) {
+      throw new FluxError(503, "Too many connections for this flux");
+    }
+
+    // Create new emitter
+    const emitter = new EventEmitter();
+    (emitter as any).lastActivity = Date.now();
+
+    // Store connection
+    if (!this.connections.has(fluxId)) {
+      this.connections.set(fluxId, new Set());
+    }
+    this.connections.get(fluxId)!.add(emitter);
+    this.connectionCounts.set(fluxId, currentCount + 1);
+
+    return emitter;
+  }
+
+  removeConnection(fluxId: string, emitter: EventEmitter) {
+    const emitters = this.connections.get(fluxId);
+    if (emitters) {
+      emitters.delete(emitter);
+      const currentCount = this.connectionCounts.get(fluxId) || 0;
+      this.connectionCounts.set(fluxId, currentCount - 1);
+
+      // Cleanup if no connections remain
+      if (emitters.size === 0) {
+        this.connections.delete(fluxId);
+        this.connectionCounts.delete(fluxId);
+      }
+    }
+  }
+
+  async broadcast(fluxId: string, data: string) {
+    const emitters = this.connections.get(fluxId);
+    if (emitters) {
+      const promises = Array.from(emitters).map(async (emitter) => {
+        try {
+          (emitter as any).lastActivity = Date.now();
+          emitter.emit("message", data);
+        } catch (error) {
+          this.removeConnection(fluxId, emitter);
+        }
+      });
+      await Promise.all(promises);
+    }
+  }
+
+  checkRateLimit(fluxId: string): boolean {
+    const now = Date.now();
+    const limit = this.rateLimits.get(fluxId) || { count: 0, timestamp: now };
+
+    if (now - limit.timestamp > RATE_LIMIT_WINDOW) {
+      // Reset window
+      limit.count = 1;
+      limit.timestamp = now;
+    } else {
+      limit.count++;
+    }
+
+    this.rateLimits.set(fluxId, limit);
+    return limit.count <= MAX_REQUESTS_PER_WINDOW;
+  }
+}
 
 const app = new Hono();
+const connectionManager = new ConnectionManager();
+
+// Middleware
 app.use("*", cors({
   origin: "*",
   allowMethods: ["GET", "POST", "OPTIONS"],
@@ -18,36 +135,28 @@ app.use("*", cors({
   credentials: true
 }));
 
-const eventEmitter = new EventEmitter();
-interface EmitMessage {
-  fluxId: string;
-  data: string;
-}
+app.use("*", async (c, next) => {
+  try {
+    await next();
+  } catch (error) {
+    if (error instanceof FluxError) {
+      return c.json({ error: error.message }, error.status);
+    }
+    console.error('Unexpected error:', error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
 
-async function sendData(message: EmitMessage) {
-  await db.update(fluxpoints).set({
-    data: message.data
-  }).where(eq(fluxpoints.id, message.fluxId));
-  eventEmitter.emit("message", message);
-}
-
-
-app.get("/", serveStatic({
-  path: "src/pages/index.html",
-}));
-
-app.get("/new", serveStatic({
-  path: "src/pages/new.html",
-}));
-
-
+// Routes
+app.get("/", serveStatic({ path: "src/pages/index.html" }));
+app.get("/new", serveStatic({ path: "src/pages/new.html" }));
 
 app.post("/new", async (c) => {
   const authorization = c.req.header("Authorization");
   const bearer = authorization?.split(" ")[1];
 
   if (!!process.env.API_KEY && bearer !== process.env.API_KEY) {
-    return c.json({ error: "Invalid API key" }, 401);
+    throw new FluxError(401, "Invalid API key");
   }
 
   const fluxDetails = await newFlux();
@@ -57,61 +166,59 @@ app.post("/new", async (c) => {
 app.post("/flux/:id", async (c) => {
   const id = c.req.param("id");
   const authorization = c.req.header("Authorization");
+
   if (!authorization) {
-    return c.json({ error: "Authorization header required" }, 400);
+    throw new FluxError(400, "Authorization header required");
   }
 
   const bearer = authorization.split(" ")[1];
   if (!bearer) {
-    return c.json({ error: "Invalid Authorization header" }, 400);
+    throw new FluxError(400, "Invalid Authorization header");
   }
 
-  try {
-    var body = await c.req.text();
-  }
-  catch {
-    return c.json({ error: "Invalid data" }, 400);
+  if (!connectionManager.checkRateLimit(id)) {
+    throw new FluxError(429, "Rate limit exceeded");
   }
 
-  if (body.length > 1000) {
-    return c.json({ error: "Data too large" }, 400);
+  const body = await c.req.text();
+  if (body.length > MAX_PAYLOAD_SIZE) {
+    throw new FluxError(400, "Data too large");
   }
 
   const flux = await db.query.fluxpoints.findFirst({
     where: (f, { eq }) => eq(f.id, id),
-    with: {
-      apiKey: true
-    }
+    with: { apiKey: true }
   });
 
-  if (!flux) {
-    return c.json({ error: "Flux not found" }, 404);
-  }
-
-  if (!flux.apiKey) {
-    await db.delete(fluxpoints).where(eq(fluxpoints.id, id));
-    return c.json({ error: "Flux not found" }, 404);
+  if (!flux || !flux.apiKey) {
+    if (flux) {
+      await db.delete(fluxpoints).where(eq(fluxpoints.id, id));
+    }
+    throw new FluxError(404, "Flux not found");
   }
 
   if (!await verifyString(flux.apiKey.key, bearer)) {
-    return c.json({ error: "Invalid API key" }, 401);
+    throw new FluxError(401, "Invalid API key");
   }
 
+  await db.update(fluxpoints)
+    .set({ data: body })
+    .where(eq(fluxpoints.id, id));
 
-  await sendData({ fluxId: id, data: body });
-
+  await connectionManager.broadcast(id, body);
   return c.json({ success: true });
 });
 
 app.get("/flux/:id", async (c) => {
   const id = c.req.param("id");
   const onFirst = c.req.query("onFirst") === "true";
+
   const flux = await db.query.fluxpoints.findFirst({
     where: (f, { eq }) => eq(f.id, id),
   });
 
   if (!flux) {
-    return c.json({ error: "Flux not found" }, 404);
+    throw new FluxError(404, "Flux not found");
   }
 
   c.header('Content-Type', 'text/event-stream');
@@ -119,24 +226,51 @@ app.get("/flux/:id", async (c) => {
   c.header('Connection', 'keep-alive');
 
   return streamSSE(c, async (stream) => {
-    if (onFirst && flux.data !== null) {
-      await stream.writeSSE({
-        data: flux.data
-      });
-    }
+    const emitter = await connectionManager.addConnection(id);
 
-    eventEmitter.on("message", async (message: EmitMessage) => {
-      if (message.fluxId === flux.id) {
-        await stream.writeSSE({
-          data: message.data
-        });
+    try {
+      // Send initial data if requested
+      if (onFirst && flux.data !== null) {
+        await stream.writeSSE({ data: flux.data });
       }
-    });
+
+      // Set up heartbeat
+      // In the heartbeat code, instead of sending it as data, we can use an SSE comment
+      const heartbeat = setInterval(async () => {
+        try {
+          // Send as a heartbeat event with empty data
+          await stream.writeSSE({ event: 'heartbeat', data: '' });
+        } catch (error) {
+          clearInterval(heartbeat);
+          connectionManager.removeConnection(id, emitter);
+        }
+      }, HEARTBEAT_INTERVAL);
+
+      // Handle messages
+      emitter.on("message", async (data: string) => {
+        try {
+          await stream.writeSSE({ data });
+        } catch (error) {
+          clearInterval(heartbeat);
+          connectionManager.removeConnection(id, emitter);
+        }
+      });
+
+      // Cleanup on connection close
+      c.req.raw.signal.addEventListener('abort', () => {
+        clearInterval(heartbeat);
+        connectionManager.removeConnection(id, emitter);
+      });
+    } catch (error) {
+      connectionManager.removeConnection(id, emitter);
+      throw error;
+    }
   });
 });
 
 app.get("/fluxpoints", async (c) => {
-  const [{ value: count_ }] = await db.select({ value: count(fluxpoints.id) }).from(fluxpoints);
+  const [{ value: count_ }] = await db.select({ value: count(fluxpoints.id) })
+    .from(fluxpoints);
   return c.json({ count: count_ });
 });
 
