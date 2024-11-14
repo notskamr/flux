@@ -30,6 +30,8 @@ git clone
     bunx drizzle-kit push:sqlite
     ```
 
+6. (Optional) Edit server settings in `src/config.ts`
+
 
 ### Hosting
 Host on Vercel, Railway, a VPS with Docker, or any other hosting service that supports Bun.
