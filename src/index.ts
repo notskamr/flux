@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from "hono/cors";
+import { logger } from 'hono/logger';
 import { serveStatic } from 'hono/bun';
 import { streamSSE } from 'hono/streaming';
 import { EventEmitter } from 'events';
@@ -144,6 +145,7 @@ app.use("*", async (c, next) => {
     }
     console.error('Unexpected error:', error);
     return c.json({ error: "Internal server error" }, 500);
+app.use(logger());
   }
 });
 
