@@ -11,15 +11,7 @@ import { newFlux } from './utils';
 import { verifyString } from './utils/hashing';
 import 'dotenv/config';
 import { StatusCode } from 'hono/utils/http-status';
-
-// Configuration constants
-const MAX_CONNECTIONS = 10000;
-const MAX_CONNECTIONS_PER_FLUX = 250;
-const HEARTBEAT_INTERVAL = 30000; // 30 seconds
-const CONNECTION_TIMEOUT = 300000; // 5 minutes
-const MAX_PAYLOAD_SIZE = 2000; // bytes
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const MAX_REQUESTS_PER_WINDOW = 100;
+import { config } from './config';
 
 // Custom error class
 class FluxError extends Error {
@@ -36,14 +28,14 @@ class ConnectionManager {
 
   constructor() {
     // Periodic cleanup of stale connections
-    setInterval(() => this.cleanup(), CONNECTION_TIMEOUT);
+    setInterval(() => this.cleanup(), config.connectionTimeout);
   }
 
   private cleanup() {
     const now = Date.now();
     this.connections.forEach((emitters, fluxId) => {
       emitters.forEach(emitter => {
-        if ((emitter as any).lastActivity < now - CONNECTION_TIMEOUT) {
+        if ((emitter as any).lastActivity < now - config.connectionTimeout) {
           this.removeConnection(fluxId, emitter);
         }
       });
@@ -54,13 +46,13 @@ class ConnectionManager {
     // Check global connection limit
     const totalConnections = Array.from(this.connectionCounts.values())
       .reduce((sum, count) => sum + count, 0);
-    if (totalConnections >= MAX_CONNECTIONS) {
+    if (totalConnections >= config.maxConnections) {
       throw new FluxError(503, "Server at capacity");
     }
 
     // Check per-flux connection limit
     const currentCount = this.connectionCounts.get(fluxId) || 0;
-    if (currentCount >= MAX_CONNECTIONS_PER_FLUX) {
+    if (currentCount >= config.maxConnectionsPerFlux) {
       throw new FluxError(503, "Too many connections for this flux");
     }
 
@@ -112,7 +104,7 @@ class ConnectionManager {
     const now = Date.now();
     const limit = this.rateLimits.get(fluxId) || { count: 0, timestamp: now };
 
-    if (now - limit.timestamp > RATE_LIMIT_WINDOW) {
+    if (now - limit.timestamp > config.rateLimitWindow) {
       // Reset window
       limit.count = 1;
       limit.timestamp = now;
@@ -121,7 +113,7 @@ class ConnectionManager {
     }
 
     this.rateLimits.set(fluxId, limit);
-    return limit.count <= MAX_REQUESTS_PER_WINDOW;
+    return limit.count <= config.maxRequestsPerWindow;
   }
 }
 
@@ -136,17 +128,15 @@ app.use("*", cors({
   credentials: true
 }));
 
-app.use("*", async (c, next) => {
-  try {
-    await next();
-  } catch (error) {
-    if (error instanceof FluxError) {
-      return c.json({ error: error.message }, error.status);
-    }
-    console.error('Unexpected error:', error);
-    return c.json({ error: "Internal server error" }, 500);
 app.use(logger());
+
+app.onError((error, c) => {
+  if (error instanceof FluxError) {
+    console.error('FluxError:', error);
+    return c.json({ error: error.message }, error.status);
   }
+  console.error('Unexpected error:', error);
+  return c.json({ error: "Internal server error" }, 500);
 });
 
 // Routes
@@ -183,7 +173,7 @@ app.post("/flux/:id", async (c) => {
   }
 
   const body = await c.req.text();
-  if (body.length > MAX_PAYLOAD_SIZE) {
+  if (body.length > config.maxPayloadSize) {
     throw new FluxError(400, "Data too large");
   }
 
@@ -246,7 +236,7 @@ app.get("/flux/:id", async (c) => {
           clearInterval(heartbeat);
           connectionManager.removeConnection(id, emitter);
         }
-      }, HEARTBEAT_INTERVAL);
+      }, config.heartbeatInterval);
 
       // Handle messages
       emitter.on("message", async (data: string) => {
