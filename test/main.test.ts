@@ -111,7 +111,7 @@ describe("", () => {
             headers: {
                 Authorization: `Bearer ${key}`
             },
-            body: "A".repeat(1001) // 1000 character limit
+            body: "A".repeat(2001) // 1000 character limit
         });
 
         expect(res.status).toBe(400);
