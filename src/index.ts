@@ -226,8 +226,10 @@ app.get("/flux/:id", async (c) => {
         await stream.writeSSE({ data: flux.data });
       }
 
-      // Set up heartbeat
-      // In the heartbeat code, instead of sending it as data, we can use an SSE comment
+      // Send initial heartbeat
+      await stream.writeSSE({ event: 'heartbeat', data: '' });
+
+      // Heartbeat interval
       const heartbeat = setInterval(async () => {
         try {
           // Send as a heartbeat event with empty data
