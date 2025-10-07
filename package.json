@@ -4,7 +4,7 @@
     "start": "bun src/index.ts"
   },
   "dependencies": {
-    "@libsql/client": "^0.6.0",
+    "@libsql/client": "^0.15.15",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.30.7",
     "hono": "^4.1.3"
