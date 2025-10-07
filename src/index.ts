@@ -118,6 +118,7 @@ class ConnectionManager {
 }
 
 const app = new Hono();
+
 const connectionManager = new ConnectionManager();
 
 // Middleware
@@ -133,7 +134,7 @@ app.use(logger());
 app.onError((error, c) => {
   if (error instanceof FluxError) {
     console.error('FluxError:', error);
-    return c.json({ error: error.message }, error.status);
+    return c.json({ error: error.message }, error.status as any);
   }
   console.error('Unexpected error:', error);
   return c.json({ error: "Internal server error" }, 500);
