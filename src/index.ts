@@ -40,6 +40,12 @@ class ConnectionManager {
         }
       });
     });
+
+    this.rateLimits.forEach((limit, fluxId) => {
+      if (now - limit.timestamp > config.rateLimitWindow * 10) {
+        this.rateLimits.delete(fluxId);
+      }
+    });
   }
 
   async addConnection(fluxId: string): Promise<EventEmitter> {
@@ -72,7 +78,7 @@ class ConnectionManager {
 
   removeConnection(fluxId: string, emitter: EventEmitter) {
     const emitters = this.connections.get(fluxId);
-    if (emitters) {
+    if (emitters && emitters.has(emitter)) {
       emitters.delete(emitter);
       const currentCount = this.connectionCounts.get(fluxId) || 0;
       this.connectionCounts.set(fluxId, currentCount - 1);
