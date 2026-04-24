@@ -247,20 +247,30 @@ app.get("/flux/:id", async (c) => {
         }
       }, config.heartbeatInterval);
 
-      // Handle messages
-      emitter.on("message", async (data: string) => {
-        try {
-          await stream.writeSSE({ data });
-        } catch (error) {
+      await new Promise<void>((resolve) => {
+        let resolved = false;
+        const done = () => {
+          if (resolved) return;
+          resolved = true;
           clearInterval(heartbeat);
           connectionManager.removeConnection(id, emitter);
-        }
-      });
+          resolve();
+        };
 
-      // Cleanup on connection close
-      c.req.raw.signal.addEventListener('abort', () => {
-        clearInterval(heartbeat);
-        connectionManager.removeConnection(id, emitter);
+        // Handle messages
+        emitter.on("message", async (data: string) => {
+          try {
+            await stream.writeSSE({ data });
+          } catch {
+            done();
+          }
+        });
+
+        // Cleanup on connection close
+        c.req.raw.signal.addEventListener('abort', done);
+
+        // ensure cleanup
+        stream.onAbort(done);
       });
     } catch (error) {
       connectionManager.removeConnection(id, emitter);
