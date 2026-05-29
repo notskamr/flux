@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import { cors } from "hono/cors";
-import { logger } from 'hono/logger';
 import { serveStatic } from 'hono/bun';
 import { streamSSE } from 'hono/streaming';
 import { EventEmitter } from 'events';
@@ -12,6 +11,7 @@ import { verifyString } from './utils/hashing';
 import 'dotenv/config';
 import { StatusCode } from 'hono/utils/http-status';
 import { config } from './config';
+import { _logger, log } from './logger';
 
 // Custom emitter class to track last activity and allow cleanup
 class FluxEmitter extends EventEmitter {
@@ -58,14 +58,18 @@ class ConnectionManager {
     // Check global connection limit
     const totalConnections = Array.from(this.connectionCounts.values())
       .reduce((sum, count) => sum + count, 0);
+
     if (totalConnections >= config.maxConnections) {
+      log('warn', 'sse.rejected', { fluxId, reason: 'global_capacity', total: totalConnections });
       throw new FluxError(503, "Server at capacity");
     }
 
     // Check per-flux connection limit
     const currentCount = this.connectionCounts.get(fluxId) || 0;
+
     if (currentCount >= config.maxConnectionsPerFlux) {
-      throw new FluxError(503, "Too many connections for this flux");
+      log('warn', 'sse.rejected', { fluxId, reason: 'per_flux_limit', current: currentCount });
+      throw new FluxError(503, "Too many connections for this fluxpoint");
     }
 
     // Create new emitter
@@ -77,6 +81,8 @@ class ConnectionManager {
     }
     this.connections.get(fluxId)!.add(emitter);
     this.connectionCounts.set(fluxId, currentCount + 1);
+
+    log('info', 'sse.connect', { fluxId, connections: currentCount + 1 });
 
     return emitter;
   }
@@ -93,17 +99,20 @@ class ConnectionManager {
         this.connections.delete(fluxId);
         this.connectionCounts.delete(fluxId);
       }
+      log('debug', 'sse.disconnect', { fluxId, remaining: emitters?.size ?? 0 });
     }
   }
 
   async broadcast(fluxId: string, data: string) {
     const emitters = this.connections.get(fluxId);
     if (emitters) {
+      log('debug', 'sse.broadcast', { fluxId, subscribers: emitters.size, bytes: Buffer.byteLength(data) });
       const promises = Array.from(emitters).map(async (emitter) => {
         try {
           emitter.lastActivity = Date.now();
           emitter.emit("message", data);
         } catch (error) {
+          log('error', 'sse.emit_error', { fluxId, error: error instanceof Error ? error.message : String(error) });
           this.removeConnection(fluxId, emitter);
         }
       });
@@ -140,14 +149,14 @@ app.use("*", cors({
   credentials: true
 }));
 
-app.use(logger());
+app.use("*", _logger());
 
 app.onError((error, c) => {
   if (error instanceof FluxError) {
-    console.error('FluxError:', error);
+    log('warn', 'request.error', { status: error.status, message: error.message });
     return c.json({ error: error.message }, error.status as any);
   }
-  console.error('Unexpected error:', error);
+  log('error', 'request.unhandled_error', { error: error instanceof Error ? error.message : String(error) });
   return c.json({ error: "Internal server error" }, 500);
 });
 
@@ -182,6 +191,7 @@ app.post("/flux/:id", async (c) => {
 
   const body = await c.req.text();
   if (body.length > config.maxPayloadSize) {
+    log('warn', 'payload_too_large', { fluxId: id, size: Buffer.byteLength(body) });
     throw new FluxError(400, "Data too large");
   }
 
@@ -198,6 +208,7 @@ app.post("/flux/:id", async (c) => {
   }
 
   if (!connectionManager.checkRateLimit(id)) {
+    log('warn', 'rate_limit.exceeded', { fluxId: id });
     throw new FluxError(429, "Rate limit exceeded");
   }
 
@@ -266,6 +277,7 @@ app.get("/flux/:id", async (c) => {
             await stream.writeSSE({ event: 'heartbeat', data: '' });
             emitter.lastActivity = Date.now();
           } catch (error) {
+            log('error', 'sse.heartbeat_error', { fluxId: id, error: error instanceof Error ? error.message : String(error) });
             done();
           }
         }, config.heartbeatInterval);
@@ -274,7 +286,8 @@ app.get("/flux/:id", async (c) => {
         emitter.on("message", async (data: string) => {
           try {
             await stream.writeSSE({ data });
-          } catch {
+          } catch (error) {
+            log('error', 'sse.write_broadcast_error', { fluxId: id, error: error instanceof Error ? error.message : String(error) });
             done();
           }
         });
@@ -287,9 +300,13 @@ app.get("/flux/:id", async (c) => {
         if (typeof stream.onAbort === 'function') stream.onAbort(done);
       });
     } catch (error) {
+      log('error', 'sse.connection_error', { fluxId: id, error: error instanceof Error ? error.message : String(error) });
       connectionManager.removeConnection(id, emitter);
       throw error;
     }
+  }, async (err) => {
+    log('error', 'sse.error', { fluxId: id, error: err instanceof Error ? err.message : String(err) });
+    throw new FluxError(500, "SSE stream error");
   });
 });
 
@@ -306,4 +323,7 @@ Bun.serve({
   idleTimeout: config.heartbeatInterval / 1000 * 2,
 });
 
-console.log(`Server running at http://${Bun.env.HOST || 'localhost'}:${process.env.PORT || 3000} in ${Bun.env.NODE_ENV} mode`);
+log('info', 'server.start', {
+  uri: `http://${Bun.env.HOST ?? 'localhost'}:${process.env.PORT || 3000}`,
+  env: Bun.env.NODE_ENV
+});
