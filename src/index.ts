@@ -13,6 +13,12 @@ import 'dotenv/config';
 import { StatusCode } from 'hono/utils/http-status';
 import { config } from './config';
 
+// Custom emitter class to track last activity and allow cleanup
+class FluxEmitter extends EventEmitter {
+  lastActivity: number = Date.now();
+  close?: () => void;
+}
+
 // Custom error class
 class FluxError extends Error {
   constructor(public status: StatusCode, message: string) {
@@ -22,7 +28,7 @@ class FluxError extends Error {
 
 // Connection management
 class ConnectionManager {
-  private connections: Map<string, Set<EventEmitter>> = new Map();
+  private connections: Map<string, Set<FluxEmitter>> = new Map();
   private connectionCounts: Map<string, number> = new Map();
   private rateLimits: Map<string, { count: number, timestamp: number; }> = new Map();
 
@@ -35,8 +41,8 @@ class ConnectionManager {
     const now = Date.now();
     this.connections.forEach((emitters, fluxId) => {
       emitters.forEach(emitter => {
-        if ((emitter as any).lastActivity < now - config.connectionTimeout) {
-          this.removeConnection(fluxId, emitter);
+        if (emitter.lastActivity < now - config.connectionTimeout) {
+          emitter.close?.();
         }
       });
     });
@@ -48,7 +54,7 @@ class ConnectionManager {
     });
   }
 
-  async addConnection(fluxId: string): Promise<EventEmitter> {
+  async addConnection(fluxId: string): Promise<FluxEmitter> {
     // Check global connection limit
     const totalConnections = Array.from(this.connectionCounts.values())
       .reduce((sum, count) => sum + count, 0);
@@ -63,8 +69,7 @@ class ConnectionManager {
     }
 
     // Create new emitter
-    const emitter = new EventEmitter();
-    (emitter as any).lastActivity = Date.now();
+    const emitter = new FluxEmitter();
 
     // Store connection
     if (!this.connections.has(fluxId)) {
@@ -76,7 +81,7 @@ class ConnectionManager {
     return emitter;
   }
 
-  removeConnection(fluxId: string, emitter: EventEmitter) {
+  removeConnection(fluxId: string, emitter: FluxEmitter) {
     const emitters = this.connections.get(fluxId);
     if (emitters && emitters.has(emitter)) {
       emitters.delete(emitter);
@@ -96,7 +101,7 @@ class ConnectionManager {
     if (emitters) {
       const promises = Array.from(emitters).map(async (emitter) => {
         try {
-          (emitter as any).lastActivity = Date.now();
+          emitter.lastActivity = Date.now();
           emitter.emit("message", data);
         } catch (error) {
           this.removeConnection(fluxId, emitter);
@@ -175,10 +180,6 @@ app.post("/flux/:id", async (c) => {
     throw new FluxError(400, "Invalid Authorization header");
   }
 
-  if (!connectionManager.checkRateLimit(id)) {
-    throw new FluxError(429, "Rate limit exceeded");
-  }
-
   const body = await c.req.text();
   if (body.length > config.maxPayloadSize) {
     throw new FluxError(400, "Data too large");
@@ -194,6 +195,10 @@ app.post("/flux/:id", async (c) => {
       await db.delete(fluxpoints).where(eq(fluxpoints.id, id));
     }
     throw new FluxError(404, "Flux not found");
+  }
+
+  if (!connectionManager.checkRateLimit(id)) {
+    throw new FluxError(429, "Rate limit exceeded");
   }
 
   if (!await verifyString(flux.apiKey.key, bearer)) {
@@ -221,10 +226,10 @@ app.get("/flux/:id", async (c) => {
   }
 
   c.header('Content-Type', 'text/event-stream');
-  c.header('Cache-Control', 'no-cache no-transform');
-  c.header('Connection', 'keep-alive');
+  c.header('Cache-Control', 'no-cache, no-transform');
 
   return streamSSE(c, async (stream) => {
+
     const emitter = await connectionManager.addConnection(id);
 
     try {
@@ -236,26 +241,34 @@ app.get("/flux/:id", async (c) => {
       // Send initial heartbeat
       await stream.writeSSE({ event: 'heartbeat', data: '' });
 
-      // Heartbeat interval
-      const heartbeat = setInterval(async () => {
-        try {
-          // Send as a heartbeat event with empty data
-          await stream.writeSSE({ event: 'heartbeat', data: '' });
-        } catch (error) {
-          clearInterval(heartbeat);
-          connectionManager.removeConnection(id, emitter);
-        }
-      }, config.heartbeatInterval);
-
       await new Promise<void>((resolve) => {
         let resolved = false;
+        let heartbeat: ReturnType<typeof setInterval>;
+        let lifetime: ReturnType<typeof setTimeout>;
+
         const done = () => {
           if (resolved) return;
           resolved = true;
           clearInterval(heartbeat);
+          clearTimeout(lifetime);
+          emitter.removeAllListeners();
           connectionManager.removeConnection(id, emitter);
           resolve();
         };
+
+        emitter.close = done;
+
+        // Heartbeat interval
+        heartbeat = setInterval(async () => {
+          if (stream.aborted) return done();
+          try {
+            // Send as a heartbeat event with empty data
+            await stream.writeSSE({ event: 'heartbeat', data: '' });
+            emitter.lastActivity = Date.now();
+          } catch (error) {
+            done();
+          }
+        }, config.heartbeatInterval);
 
         // Handle messages
         emitter.on("message", async (data: string) => {
@@ -266,11 +279,12 @@ app.get("/flux/:id", async (c) => {
           }
         });
 
-        // Cleanup on connection close
-        c.req.raw.signal.addEventListener('abort', done);
+        // Connection lifetime limit
+        lifetime = setTimeout(done, config.maxConnectionLifetime);
 
-        // ensure cleanup
-        stream.onAbort(done);
+        /// ensure cleanup
+        c.req.raw.signal.addEventListener('abort', done);
+        if (typeof stream.onAbort === 'function') stream.onAbort(done);
       });
     } catch (error) {
       connectionManager.removeConnection(id, emitter);
@@ -285,4 +299,11 @@ app.get("/fluxpoints", async (c) => {
   return c.json({ count: count_ });
 });
 
-export default app;
+Bun.serve({
+  fetch: app.fetch,
+  port: Number(process.env.PORT) || 3000,
+  development: Bun.env.NODE_ENV !== "production",
+  idleTimeout: config.heartbeatInterval / 1000 * 2,
+});
+
+console.log(`Server running at http://${Bun.env.HOST || 'localhost'}:${process.env.PORT || 3000} in ${Bun.env.NODE_ENV} mode`);

@@ -6,4 +6,5 @@ export const config = {
     maxPayloadSize: 2000, // Maximum size of a message payload
     rateLimitWindow: 60000, // Time window for rate limiting
     maxRequestsPerWindow: 100, // Maximum number of requests per rate limit window
+    maxConnectionLifetime: 8 * 60 * 60 * 1000, // Maximum lifetime of a connection (8 hours) - EventSource will attempt to reconnect after this time
 };
