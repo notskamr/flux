@@ -19,6 +19,7 @@ export const fluxpoints = sqliteTable("fluxes", {
     id: text("id").primaryKey().notNull().$defaultFn(() => generateFluxId()),
     data: text("data"),
     createdAt: text("created_at").$defaultFn(() => sql`(CURRENT_TIMESTAMP)`),
+    updatedAt: text("updated_at").$defaultFn(() => sql`(CURRENT_TIMESTAMP)`).$onUpdateFn(() => sql`(CURRENT_TIMESTAMP)`),
 });
 
 export const fluxpointsRelations = relations(fluxpoints, ({ one }) => ({

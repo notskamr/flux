@@ -1,0 +1,1 @@
+ALTER TABLE fluxes ADD `updated_at` text;
