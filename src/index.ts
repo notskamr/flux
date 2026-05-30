@@ -137,7 +137,7 @@ class ConnectionManager {
   }
 }
 
-const app = new Hono();
+export const app = new Hono();
 
 const connectionManager = new ConnectionManager();
 

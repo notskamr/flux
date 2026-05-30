@@ -1,8 +1,11 @@
 import { newFlux } from "../src/utils";
-import { fluxpoints } from "../src/db/schema";
+import { generateApiKey } from "../src/utils";
+import { hashString, verifyString } from "../src/utils/hashing";
+import { fluxpoints, apiKeys } from "../src/db/schema";
+import { config } from "../src/config";
 import { count, eq } from "drizzle-orm";
 import { describe, it, expect } from "bun:test";
-import app from "../src";
+import { app } from "../src";
 import { db } from "../src/db";
 
 describe("", () => {
@@ -36,7 +39,6 @@ describe("", () => {
         }
         expect(flux.data).toBe(null);
 
-        // post data
         const res = await app.request(`/flux/${id}`, {
             method: "POST",
             headers: {
@@ -111,7 +113,7 @@ describe("", () => {
             headers: {
                 Authorization: `Bearer ${key}`
             },
-            body: "A".repeat(2001) // 1000 character limit
+            body: "A".repeat(config.maxPayloadSize + 1)
         });
 
         expect(res.status).toBe(400);
@@ -145,4 +147,185 @@ describe("", () => {
         expect(res.status).toBe(200);
         expect(await res.json()).toEqual({ count: 1 });
     });
+
+    it("GET fluxpoints [count, empty]", async () => {
+        const res = await app.request(`/fluxpoints`, {
+            method: "GET"
+        });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ count: 0 });
+    });
+
+    it("GET fluxpoints [count, multiple]", async () => {
+        await newFlux(db);
+        await newFlux(db);
+        await newFlux(db);
+        const res = await app.request(`/fluxpoints`, {
+            method: "GET"
+        });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ count: 3 });
+    });
+
+    it("POST fluxpoint [no authorization header]", async () => {
+        const { id } = await newFlux(db);
+        const res = await app.request(`/flux/${id}`, {
+            method: "POST",
+            body: "Hello, World!"
+        });
+
+        expect(res.status).toBe(400);
+        expect(await res.json()).toEqual({ error: "Authorization header required" });
+    });
+
+    it("POST fluxpoint [malformed authorization header]", async () => {
+        const { id } = await newFlux(db);
+        const res = await app.request(`/flux/${id}`, {
+            method: "POST",
+            headers: {
+                Authorization: "Bearer"
+            },
+            body: "Hello, World!"
+        });
+
+        expect(res.status).toBe(400);
+        expect(await res.json()).toEqual({ error: "Invalid Authorization header" });
+    });
+
+    it("POST fluxpoint [payload at limit]", async () => {
+        const { id, key } = await newFlux(db);
+        const res = await app.request(`/flux/${id}`, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${key}`
+            },
+            body: "A".repeat(config.maxPayloadSize)
+        });
+
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ success: true });
+
+        const [flux] = await db.select().from(fluxpoints).where(eq(fluxpoints.id, id));
+        expect(flux?.data).toBe("A".repeat(config.maxPayloadSize));
+    });
+
+    it("POST fluxpoint [overwrites existing data]", async () => {
+        const { id, key } = await newFlux(db);
+
+        const first = await app.request(`/flux/${id}`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${key}` },
+            body: "first"
+        });
+        expect(first.status).toBe(200);
+
+        const second = await app.request(`/flux/${id}`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${key}` },
+            body: "second"
+        });
+        expect(second.status).toBe(200);
+
+        const [flux] = await db.select().from(fluxpoints).where(eq(fluxpoints.id, id));
+        expect(flux?.data).toBe("second");
+    });
+
+    it("POST fluxpoint [rate limit]", async () => {
+        const { id, key } = await newFlux(db);
+
+        // Exhaust the rate limit window for this flux.
+        let lastStatus = 200;
+        for (let i = 0; i < config.maxRequestsPerWindow + 1; i++) {
+            const res = await app.request(`/flux/${id}`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${key}` },
+                body: "x"
+            });
+            lastStatus = res.status;
+        }
+
+        expect(lastStatus).toBe(429);
+    });
+
+    it("methods are restricted by CORS allowMethods", async () => {
+        const res = await app.request(`/flux/some-id`, {
+            method: "OPTIONS",
+            headers: {
+                Origin: "https://example.com",
+                "Access-Control-Request-Method": "POST"
+            }
+        });
+        expect(res.headers.get("Access-Control-Allow-Methods")).toContain("POST");
+    });
 });
+
+describe("newFlux", () => {
+    it("creates a flux with a matching api key row", async () => {
+        const { id, key } = await newFlux(db);
+
+        expect(id).toBeDefined();
+        expect(key).toBeDefined();
+
+        const [apiKey] = await db.select().from(apiKeys).where(eq(apiKeys.fluxId, id));
+        expect(apiKey).toBeDefined();
+        // Stored key is hashed, not the raw key.
+        expect(apiKey?.key).not.toBe(key);
+        expect(await verifyString(apiKey!.key, key)).toBe(true);
+    });
+
+    it("generates unique ids and keys", async () => {
+        const a = await newFlux(db);
+        const b = await newFlux(db);
+
+        expect(a.id).not.toBe(b.id);
+        expect(a.key).not.toBe(b.key);
+    });
+});
+
+describe("hashing", () => {
+    it("hashString produces a salt:hash pair", async () => {
+        const hash = await hashString("secret");
+        const [salt, digest] = hash.split(":");
+        expect(salt).toBeDefined();
+        expect(digest).toBeDefined();
+        expect(salt.length).toBe(32); // 16-byte salt as hex
+    });
+
+    it("hashString is salted (same input, different output)", async () => {
+        const a = await hashString("secret");
+        const b = await hashString("secret");
+        expect(a).not.toBe(b);
+    });
+
+    it("verifyString accepts the correct value", async () => {
+        const hash = await hashString("correct horse");
+        expect(await verifyString(hash, "correct horse")).toBe(true);
+    });
+
+    it("verifyString rejects the wrong value", async () => {
+        const hash = await hashString("correct horse");
+        expect(await verifyString(hash, "wrong horse")).toBe(false);
+    });
+
+    it("verifyString throws on a hash with no digest", async () => {
+        // No ":" means there's no digest portion.
+        expect(verifyString("abcd", "anything")).rejects.toThrow("Invalid hash format");
+    });
+
+    it("verifyString throws when the salt portion is empty", async () => {
+        expect(verifyString(":deadbeef", "anything")).rejects.toThrow("Invalid hash format");
+    });
+
+    it("verifyString throws on a non-hex salt", async () => {
+        expect(verifyString("zz:deadbeef", "anything")).rejects.toThrow("Invalid salt format");
+    });
+});
+
+describe("generateApiKey", () => {
+    it("returns a 32-char hex string without dashes", () => {
+        const key = generateApiKey();
+        expect(key).not.toContain("-");
+        expect(key.length).toBe(32);
+    });
+});
+

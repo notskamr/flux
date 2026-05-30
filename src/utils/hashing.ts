@@ -44,7 +44,12 @@ export async function verifyString(
     stringAttempt: string
 ): Promise<boolean> {
     const [saltHex, originalHash] = storedHash.split(":");
-    const matchResult = saltHex.match(/.{1,2}/g);
+    if (!saltHex || !originalHash) {
+        throw new Error("Invalid hash format");
+    }
+    const matchResult = saltHex.match(/^(?:[0-9a-f]{2})+$/i)
+        ? saltHex.match(/.{2}/g)
+        : null;
     if (!matchResult) {
         throw new Error("Invalid salt format");
     }
