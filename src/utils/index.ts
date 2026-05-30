@@ -1,6 +1,9 @@
 import { db } from "../db";
 import { apiKeys, fluxpoints } from "../db/schema";
 import { hashString } from "./hashing";
+import { generateApiKey } from "./ids";
+
+export { generateFluxId, generateApiKey } from "./ids";
 
 export async function newFlux(
     database = db
@@ -25,8 +28,4 @@ export async function newFlux(
         id: flux.id,
         key: apiKeyString,
     };
-}
-
-export function generateApiKey() {
-    return crypto.randomUUID().replace(/-/g, '');
 }

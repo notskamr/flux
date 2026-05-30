@@ -1,6 +1,6 @@
 export async function hashString(
     string: string,
-    providedSalt?: Uint8Array
+    providedSalt?: Uint8Array<ArrayBuffer>
 ): Promise<string> {
     const encoder = new TextEncoder();
     // Use provided salt if available, otherwise generate a new one

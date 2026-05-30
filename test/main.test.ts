@@ -1,5 +1,5 @@
 import { newFlux } from "../src/utils";
-import { generateApiKey } from "../src/utils";
+import { generateApiKey, generateFluxId } from "../src/utils";
 import { hashString, verifyString } from "../src/utils/hashing";
 import { fluxpoints, apiKeys } from "../src/db/schema";
 import { config } from "../src/config";
@@ -322,10 +322,30 @@ describe("hashing", () => {
 });
 
 describe("generateApiKey", () => {
-    it("returns a 32-char hex string without dashes", () => {
+    it("returns a base64url string from 32 random bytes", () => {
         const key = generateApiKey();
-        expect(key).not.toContain("-");
-        expect(key.length).toBe(32);
+        expect(key).toMatch(/^[A-Za-z0-9_-]+$/);
+        expect(Buffer.from(key, "base64url").length).toBe(32);
+    });
+
+    it("returns unique values", () => {
+        expect(generateApiKey()).not.toBe(generateApiKey());
+    });
+});
+
+describe("generateFluxId", () => {
+    it("returns an 8-char base62 string by default", () => {
+        const id = generateFluxId();
+        expect(id.length).toBe(8);
+        expect(id).toMatch(/^[A-Za-z0-9]+$/);
+    });
+
+    it("respects a custom length", () => {
+        expect(generateFluxId(16).length).toBe(16);
+    });
+
+    it("returns unique values", () => {
+        expect(generateFluxId()).not.toBe(generateFluxId());
     });
 });
 

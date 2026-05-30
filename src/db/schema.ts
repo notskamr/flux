@@ -1,5 +1,6 @@
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 import { relations, sql } from "drizzle-orm";
+import { generateFluxId } from "../utils/ids";
 
 export const apiKeys = sqliteTable("api_keys", {
     fluxId: text("flux_id").primaryKey().notNull().references(() => fluxpoints.id, { onDelete: "cascade" }),
@@ -15,7 +16,7 @@ export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
 }));
 
 export const fluxpoints = sqliteTable("fluxes", {
-    id: text("id").primaryKey().notNull().$defaultFn(() => Math.random().toString(36).slice(2)),
+    id: text("id").primaryKey().notNull().$defaultFn(() => generateFluxId()),
     data: text("data"),
     createdAt: text("created_at").$defaultFn(() => sql`(CURRENT_TIMESTAMP)`),
 });
